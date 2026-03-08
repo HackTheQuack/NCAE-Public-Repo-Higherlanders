@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+echo "NJIT NCAE 2025 Remote SSH Setup Script"
+echo
+
+# Check for root.
+if [ "$EUID" -ne 0 ]
+  then echo "This script must be ran as root."
+  exit 1
+fi
+
+groupadd highlanders
+groupadd highlanderslow
+echo '%highlanders ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-highlanders
+
+# Creates team user.
+# $1: Username
+# $2: Group
+# $3: SSH public key.
+function createUser {
+  echo "Creating team user for $1."
+  useradd -c "NJIT $1" -G "$2" -s "/bin/bash" "$1"
+  mkdir -p /home/$1/.ssh
+  echo $3 > /home/$1/.ssh/authorized_keys
+  chown -R ${1}:${1} /home/$1/.ssh
+  chmod -R u=rwX,go= /home/$1/.ssh
+}
+
+# Create team users. Will add usernames and keys on competition day.
+createUser "USER" "highlanders" "SSHKEY"
+
+# Create local access user.
+echo "Creating local access user 'njit-local'."
+useradd -c "NJIT Local Only" -G "highlanders" -s "/bin/bash" "njit-local"
+echo "Enter password for local access user."
+/bin/passwd "njit-local"
+
+echo "Disabling SSH password authentication, adding group match, and disallowing root login."
+sed -i -E '/AllowGroups/s/^/#/' /etc/ssh/sshd_config
+sed -i -E '/PermitRootLogin/s/^/#/' /etc/ssh/sshd_config
+sed -i -E '/PasswordAuthentication/s/^/#/' /etc/ssh/sshd_config
+echo "AllowGroups highlanders highlanderslow pointers" >> /etc/ssh/sshd_config
+echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+
+echo "Deleting root password authentication."
+/bin/passwd -dl root
+
+echo "Restarting SSH daemon."
+systemctl restart sshd.service

@@ -1,0 +1,10 @@
+i[Unit]
+Description=Restore iptables firewall rules
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=iptables-restore /etc/iptables/rules.v4
+
+[Install]
+WantedBy=multi-user.target

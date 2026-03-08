@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+echo "NJIT NCAE 2025 Remote SSH Setup Script"
+echo
+
+# Check for root.
+if [ "$EUID" -ne 0 ]
+  then echo "This script must be ran as root."
+  exit 1
+fi
+
+groupadd highlanders
+groupadd highlanderslow
+echo '%highlanders ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-highlanders
+
+# Creates team user.
+# $1: Username
+# $2: Group
+# $3: SSH public key.
+function createUser {
+  echo "Creating team user for $1."
+  useradd -c "NJIT $1" -G "$2" -s "/bin/bash" "$1"
+  mkdir -p /home/$1/.ssh
+  echo $3 > /home/$1/.ssh/authorized_keys
+  chown -R ${1}:${1} /home/$1/.ssh
+  chmod -R u=rwX,go= /home/$1/.ssh
+}
+
+# Create team users. Will add usernames and keys on competition day.
+createUser "Ben" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBFLAjRlmlHhx4D66qJE0PZdSwD7EXPOTLbdH/7Nags/ ben@hackthequack"
+createUser "Hung" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMTG1kIIRIJAbOE7t/gRMreXjV6b3eApD2dGXAmeKQas hung@hackthequack"
+createUser "Jude" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8i12OoNdLuEj4sMuVF67PDW26qrLcmgdnzRGxrY16v jude@hackthequack"
+createUser "Robert" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPoMn54GkD7is4oozQpr1u5JOIEwmu8UhkNmh5kYNwYT robert@hackthequack"
+createUser "Angel" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE99C4wMuvsAG/UbBOJ8hgl4paXXzPSyqoTPNISAT9uk angel@hackthequack"
+createUser "Nick" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINh1bYF+qGsJj6rnJg/gZ57rksvkPGHAkVivvtYeOIh7 nick@hackthequack"
+createUser "Maciej" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC6XTpvHfRD5cuToD2ibA0rxwLZAyvuijBzvSZ6tbtpw maciej@hackthequackY"
+createUser "Matt" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGApMoGpsawRGd9+WYPwjXJcq357UFMmHpEYbWAgXEOT matt@hackthequack"
+createUser "Owen" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJSX5NO7o2WqRgg9B21K9ZJeANpluY25q4Gq41wnOe9H owen@hackthequack"
+createUser "Anthony" "highlanders" "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDTQ2brAOy1tB8fl4Fqi5jbMo5jJcmd3yngr7w88HpKc anthony@hackthequack"
+
+
+# Create local access user.
+echo "Creating local access user 'njit-local'."
+useradd -c "NJIT Local Only" -G "highlanders" -s "/bin/bash" "njit-local"
+echo "Enter password for local access user."
+/bin/passwd "njit-local"
+
+echo "Disabling SSH password authentication, adding group match, and disallowing root login."
+sed -i -E '/AllowGroups/s/^/#/' /etc/ssh/sshd_config
+sed -i -E '/PermitRootLogin/s/^/#/' /etc/ssh/sshd_config
+sed -i -E '/PasswordAuthentication/s/^/#/' /etc/ssh/sshd_config
+echo "AllowGroups highlanders highlanderslow pointers" >> /etc/ssh/sshd_config
+echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+
+echo "Deleting root password authentication."
+/bin/passwd -dl root
+
+echo "Restarting SSH daemon."
+systemctl restart sshd.service
+

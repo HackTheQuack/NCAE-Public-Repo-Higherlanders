@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+
+set -e
+
+# check for root perm
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root"
+    exit 1
+fi
+
+# format messages
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+print_error() { echo -e "${RED}[ERROR] $1${NC}"; }
+print_success() { echo -e "${GREEN}[SUCCESS] $1${NC}"; }
+
+# prompt for params
+read -p "Team num: " team_num
+read -p "Host name: " host_name
+read -p "Host IP: " host_ip
+read -p "Current iteration/serial num (01-99): " iteration
+read -p "Bind backup directory: " bind_backup
+read -p "NS last octet: " ns_octet
+read -p "DB last octet: " db_octet
+read -p "Web server last octet: " http_octet
+
+# set serial number in proper format (YYYYMMDDNN)
+serial=$(date +%Y%m%d)$iteration
+timestamp=$(date +%H%M%S)
+echo -e "Using serial number $serial and creating backups with timestamp $timestamp.\n";
+
+# Ensure backup dir exists
+mkdir -p "$bind_backup"
+
+# Backup existing configs
+[[ -f /etc/named.conf ]] && cp -p /etc/named.conf "${bind_backup}/named.conf_${timestamp}"
+[[ -f /etc/named/named.conf.local ]] && cp -p /etc/named/named.conf.local "${bind_backup}/named.conf.local_${timestamp}"
+
+# make zones dir
+mkdir -p /var/named/zones
+
+# --- Forward Zone ---
+cat << EOF > "/var/named/zones/forward.team${team_num}.net"
+\$TTL 86400
+@   IN  SOA ns1.team${team_num}.net. root.team${team_num}.net. (
+              ${serial} ; Serial
+              604800    ; Refresh
+              86400     ; Retry
+              2419200   ; Expire
+              86400 )   ; Negative Cache TTL
+;
+@       IN  NS      ns1.team${team_num}.net.
+ns1     IN  A       192.168.${team_num}.${ns_octet}
+www     IN  A       192.168.${team_num}.${http_octet}
+db1     IN  A       192.168.${team_num}.${db_octet}
+${host_name} IN  A  ${host_ip}
+EOF
+
+# --- Reverse Zone ---
+# Note the trailing dots on the FQDNs to prevent origin appending
+cat << EOF > "/var/named/zones/reverse.${team_num}.168.192"
+\$TTL 86400
+@   IN  SOA ns1.team${team_num}.net. root.team${team_num}.net. (
+              ${serial} ; Serial
+              604800    ; Refresh
+              86400     ; Retry
+              2419200   ; Expire
+              86400 )   ; Negative Cache TTL
+;
+@       IN  NS      ns1.team${team_num}.net.
+${ns_octet}   IN  PTR     ns1.team${team_num}.net.
+${db_octet}   IN  PTR     db1.team${team_num}.net.
+${http_octet} IN  PTR     www.team${team_num}.net.
+EOF
+
+# Fix SELinux contexts
+restorecon -Rv /var/named > /dev/null 2>&1
+print_success "Zone files created."
+
+# Ensure the local config file exists
+touch /etc/named/named.conf.local
+
+# Create zone config entries if they don't exist
+if ! grep -q "zone \"team${team_num}.net\"" /etc/named/named.conf.local; then
+    cat << EOF >> /etc/named/named.conf.local
+
+zone "team${team_num}.net" {
+    type master;
+    file "/var/named/zones/forward.team${team_num}.net";
+    allow-query { any; };
+};
+
+zone "${team_num}.168.192.in-addr.arpa" {
+    type master;    
+    file "/var/named/zones/reverse.${team_num}.168.192";
+    allow-query { any; };
+};
+EOF
+fi
+
+# Ensure named.conf includes the local zones
+if ! grep -q 'named.conf.local' /etc/named.conf; then
+    echo 'include "/etc/named/named.conf.local";' >> /etc/named.conf
+fi
+
+# Permissions - 640 is good, but BIND needs read access
+chown -R named:named /var/named/zones
+chmod 750 /var/named/zones
+chmod 640 /var/named/zones/*
+
+# Validation
+if named-checkconf /etc/named.conf; then 
+    print_success "named.conf syntax valid."
+else
+    print_error "named.conf syntax error!"
+    exit 1
+fi
+
+# Check Forward Zone
+named-checkzone "team${team_num}.net" "/var/named/zones/forward.team${team_num}.net" || { print_error "Forward zone fail"; exit 1; }
+
+# Check Reverse Zone
+named-checkzone "${team_num}.168.192.in-addr.arpa" "/var/named/zones/reverse.${team_num}.168.192" || { print_error "Reverse zone fail"; exit 1; }
+
+# Restart and Verify
+print_success "Validation passed. Restarting BIND..."
+systemctl restart named
+systemctl is-active --quiet named && print_success "BIND is live!" || print_error "BIND failed to start!"
+
+echo -e "\n--- Test Commands ---"
+echo "dig @localhost ns1.team${team_num}.net"
+echo "dig @localhost -x 192.168.${team_num}.${ns_octet}"
